@@ -70,6 +70,7 @@ def main():
                 # for Sao Paulo
                 if "ã" in race_name:
                     race_name = race_name.replace("ã", "a")
+                    details["name"] = race_name
 
                 file_path = os.path.join(raw_path, f"{year}", f"{race_name}_laps.parquet")
 
