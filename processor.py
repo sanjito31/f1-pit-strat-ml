@@ -169,6 +169,13 @@ class F1RaceProcessor:
             lambda x: (x.diff().fillna(pd.Timedelta(0))).dt.total_seconds()
         ).round(3)
 
+        # Race Progress (normalized)
+        laps = laps.sort_values(["LapNumber"])
+        total_laps = laps["LapNumber"].max()
+        laps["RaceProgress"] = laps.groupby("LapNumber").transform(
+            lambda x: x / total_laps
+        )
+
         # Should Pit Next determination
         laps = laps.sort_values(["Driver", "LapNumber"])
         laps["pit_occurred"] = (laps.groupby("Driver")['Stint'].diff() != 0).shift(-1).astype('boolean').fillna(False)
@@ -239,7 +246,7 @@ def main():
     # 2024 USED FOR VALIDATION
 
     data_start_year = 2019
-    data_end_year = 2023
+    data_end_year = 2024
 
     for year in range(data_start_year, data_end_year + 1):
 
