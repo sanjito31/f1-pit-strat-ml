@@ -67,7 +67,7 @@ def main():
                 if num < 1 or "test" in race_name:
                     continue
 
-                # for Sao Paolo
+                # for Sao Paulo
                 if "ã" in race_name:
                     race_name = race_name.replace("ã", "a")
 

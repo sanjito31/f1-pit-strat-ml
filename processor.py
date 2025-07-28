@@ -49,7 +49,7 @@ class F1RaceProcessor:
             laps['Position'] = laps.groupby('Driver')['Position'].ffill()
 
         #PersonalBest
-        laps['IsPersonalBest'] = laps['IsPersonalBest'].fillna(False)
+        laps['IsPersonalBest'] = laps['IsPersonalBest'].astype('boolean').fillna(False)
 
         self.race["processed"] = laps
 
@@ -77,6 +77,22 @@ class F1RaceProcessor:
         drivers = pd.get_dummies(laps["Driver"], prefix="Driver")
         laps = pd.concat([laps, drivers], axis=1)
 
+        # Encode Track Status
+        track_status_codes = {
+            'status_clear': '1',
+            'status_yellow_flag': '2', 
+            'status_safety_car': '4',
+            'status_red_flag': '5',
+            'status_vsc': '6',
+            'status_vsc_ending': '7'
+        }
+
+        for status in track_status_codes.keys():
+            laps[status] = 0
+
+        for status, code in track_status_codes.items():
+            laps[status] = laps["TrackStatus"].str.contains(code, na=False).astype(int)
+
         self.race["processed"] = laps
 
 
@@ -85,29 +101,40 @@ class F1RaceProcessor:
         laps = self.race["processed"].copy()
 
         # Pace drop off per lap per driver
+        laps = laps.sort_values(["LapNumber"])
         laps["PaceDropoff"] = laps.groupby("Driver")["LapTime(s)"].transform(
-            lambda x: round(x - x.expanding().min(), 3)
-        )
+            lambda x: x - x.expanding().min()
+        ).round(3)
 
         # Last 3 lap time moving average
+        laps = laps.sort_values(["LapNumber"])
         laps["LapTimeMA3"] = laps.groupby("Driver")["LapTime(s)"].transform(
             lambda x: x.rolling(window=3).mean().fillna(x)
         ).round(3)
 
         # Lap time trend based on last 3 lap moving average
+        laps = laps.sort_values(["LapNumber"])
         laps["LapTimeTrend"] = laps.groupby("Driver")["LapTimeMA3"].transform(
             lambda x: x.diff().fillna(0)
         ).round(3)
 
         # Position changes per lap per driver
+        laps = laps.sort_values(["LapNumber"])
         laps["PositionChange"] = laps.groupby("Driver")["Position"].transform(
             lambda x: x.diff().fillna(0)
         )
 
         # Straight line speed drop off
+        laps = laps.sort_values(["LapNumber"])
         laps["SpeedDropoff"] = laps.groupby("Driver")["SpeedST"].transform(
-            lambda x: round(x - x.expanding().max(), 0)
-        )
+            lambda x: x - x.expanding().max()
+        ).round(0)
+
+        # Gap to driver ahead per lap
+        laps = laps.sort_values(["Position"])
+        laps["GapToAhead(ms)"] = laps.groupby("LapNumber")["Time"].transform(
+            lambda x: (x.diff().fillna(pd.Timedelta(0))).dt.total_seconds() * 1000
+        ).round(3)
 
         # Should Pit Next determination
         laps["ShouldPitNext"] = laps["PitInTime"].shift(-1).notna()
@@ -160,9 +187,8 @@ class F1RaceProcessor:
         
     def save_to_parquet(self, output):
 
-        dir = os.path.dirname(f"{output}/{self.year}/")
-        if dir:
-            os.makedirs(dir, exist_ok=True)
+        dir = os.path.join(f"{output}", f"{self.year}")
+        Path(dir).mkdir(parents=True, exist_ok=True)
 
         self.race["processed"].to_parquet(f'{dir}/{self.circuit}_processed.parquet')
 
@@ -174,8 +200,8 @@ def main():
 
     # years = [2018, 2019, 2020, 2021, 2022, 2023, 2024]
     years = [2024]
-    tracks = ["abudhabi", "bahrain", "monaco", "silverstone", "singapore"]
-    # tracks = ["silverstone"]
+    # tracks = ["abudhabi", "bahrain", "monaco", "silverstone", "singapore"]
+    tracks = ["sao_paulo"]
 
     for year in years:
         for track in tracks:
