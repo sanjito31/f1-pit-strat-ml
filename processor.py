@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-import os
+import json
        
 class F1RaceProcessor:
 
@@ -14,9 +14,10 @@ class F1RaceProcessor:
     def load_data(self):
 
         try: 
-            self.race["laps"] = pd.read_parquet(f"{self.data_dir}/{self.year}/{self.circuit}_laps.parquet")
-            self.race["weather"] = pd.read_parquet(f"{self.data_dir}/{self.year}/{self.circuit}_weather.parquet")
-            self.race["results"] = pd.read_parquet(f"{self.data_dir}/{self.year}/{self.circuit}_results.parquet")
+            base_path = Path(self.data_dir) / str(self.year)
+            self.race["laps"] = pd.read_parquet(base_path / f"{self.circuit}_laps.parquet")
+            self.race["weather"] = pd.read_parquet(base_path / f"{self.circuit}_weather.parquet")
+            self.race["results"] = pd.read_parquet(base_path / f"{self.circuit}_results.parquet")
         
         except FileNotFoundError as e:
             return False
@@ -32,7 +33,7 @@ class F1RaceProcessor:
 
         # Convert Lap Time to Seconds
         if laps["LapTime"].dtype == "timedelta64[ns]":
-            laps["LapTime(s)"] = laps["LapTime"].dt.total_seconds()
+            laps["LapTime(s)"] = laps["LapTime"].dt.total_seconds().round(3)
         else:
             laps["LapTime(s)"] = laps["LapTime"]
 
@@ -40,15 +41,34 @@ class F1RaceProcessor:
         laps = laps[(laps["LapTime(s)"] >= 60) & (laps["LapTime(s)"] <= 240)]
         laps['IsValidLap'] = True
 
+        # Lap Number
+        laps = laps.sort_values(["Time"])
+        laps["LapNumber"] = laps.groupby("Driver")["LapNumber"].transform(
+            lambda group: group.interpolate(method='linear').round()
+        )
+
         # Tire Compounds
         laps["Compound"] = laps.groupby(["Driver", "Stint"])["Compound"].ffill()
         laps["Compound"] = laps.groupby(["Driver", "Stint"])["Compound"].bfill()
 
-        #Position
-        if 'Position' in laps.columns:
-            laps['Position'] = laps.groupby('Driver')['Position'].ffill()
+        # Position
+        laps = laps.sort_values(['LapNumber', 'Time'])
+        laps['Position'] = laps.groupby('LapNumber')["Position"].transform(
+            lambda group: group.astype(float).fillna(laps.loc[group.index, 'Time'].rank(method='dense')).round()
+        )
 
-        #PersonalBest
+        # TyreLife
+        laps = laps.sort_values(["LapNumber"])
+        laps['TyreLife'] = laps.groupby(["Driver", "Stint"])["TyreLife"].transform(
+            lambda group: range(1, len(group) + 1)
+        )
+
+        # SpeedST (Speed on the longest straight)
+        laps = laps.sort_values(["LapNumber"])
+        laps["SpeedST"] = laps.groupby(["Driver"])["SpeedST"].ffill()
+        laps["SpeedST"] = laps.groupby(["Driver"])["SpeedST"].bfill()
+
+        # PersonalBest
         laps['IsPersonalBest'] = laps['IsPersonalBest'].astype('boolean').fillna(False)
 
         self.race["processed"] = laps
@@ -58,6 +78,7 @@ class F1RaceProcessor:
 
         weather = self.race["weather"].copy()
 
+        # Use linear interpolation for weather data since weather data is generally continuous 
         weather_cols = ['AirTemp', 'Humidity', 'Pressure', 'TrackTemp', 'WindSpeed', 'WindDirection']
         weather[weather_cols] = weather[weather_cols].interpolate(method="linear", limit=2)
         weather['WindDirection'] = weather['WindDirection'] % 360
@@ -144,8 +165,8 @@ class F1RaceProcessor:
 
         # Gap to driver ahead per lap
         laps = laps.sort_values(["Position"])
-        laps["GapToAhead(ms)"] = laps.groupby("LapNumber")["Time"].transform(
-            lambda x: (x.diff().fillna(pd.Timedelta(0))).dt.total_seconds() * 1000
+        laps["GapToAhead(s)"] = laps.groupby("LapNumber")["Time"].transform(
+            lambda x: (x.diff().fillna(pd.Timedelta(0))).dt.total_seconds()
         ).round(3)
 
         # Should Pit Next determination
@@ -202,24 +223,33 @@ class F1RaceProcessor:
         
     def save_to_parquet(self, output):
 
-        dir = os.path.join(f"{output}", f"{self.year}")
-        Path(dir).mkdir(parents=True, exist_ok=True)
+        output_dir = Path(output) / str(self.year)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.race["processed"].to_parquet(f'{dir}/{self.circuit}_processed.parquet')
+        self.race["processed"].to_parquet(output_dir / f'{self.circuit}_processed.parquet')
 
 
 def main():
 
-    input = "data/raw"
-    output = "data/processed"
+    input = Path("data/raw")
+    output = Path("data/processed")
 
-    # years = [2018, 2019, 2020, 2021, 2022, 2023, 2024]
-    years = [2024]
-    # tracks = ["abudhabi", "bahrain", "monaco", "silverstone", "singapore"]
-    tracks = ["sao_paulo"]
+    # NO 2018 SINCE MANY GAPS IN STINT AND TYRELIFE DATA
+    # 2019 - 2023 USED FOR TRAINING
+    # 2024 USED FOR VALIDATION
 
-    for year in years:
-        for track in tracks:
+    data_start_year = 2019
+    data_end_year = 2023
+
+    for year in range(data_start_year, data_end_year + 1):
+
+        tracks = {}
+        with open(input / f"{year}" / "schedule.json", "r") as f:
+            tracks = json.load(f)
+
+        for _, event in tracks.items():
+
+            track = event["name"]
 
             ## Create race object
             race = F1RaceProcessor(track, year, input)
@@ -238,6 +268,11 @@ def main():
             race.engineer_pace_features()
             race.add_weather()
             race.drop_unused_columns()
+
+            ## NA Report
+            missing = race.race["processed"].isna().sum().sum()
+            if missing > 0:
+                print(f"{track}, {year} has {missing} values missing.")
 
             ## Save data to file
             race.save_to_parquet(output)
