@@ -25,7 +25,7 @@ class F1RaceProcessor:
 
 
 
-    def clean_data(self):
+    def clean_laps_data(self):
 
         # Remove NaN lap times
         laps = self.race["laps"].dropna(subset=["LapTime"]).copy()
@@ -52,6 +52,18 @@ class F1RaceProcessor:
         laps['IsPersonalBest'] = laps['IsPersonalBest'].astype('boolean').fillna(False)
 
         self.race["processed"] = laps
+
+
+    def clean_weather_data(self):
+
+        weather = self.race["weather"].copy()
+
+        weather_cols = ['AirTemp', 'Humidity', 'Pressure', 'TrackTemp', 'WindSpeed', 'WindDirection']
+        weather[weather_cols] = weather[weather_cols].interpolate(method="linear", limit=2)
+        weather['WindDirection'] = weather['WindDirection'] % 360
+        weather['Rainfall'] = weather['Rainfall'].astype('boolean').ffill().fillna(0)
+
+        self.race["weather"] = weather
 
 
     def dummy_encoding(self):
@@ -218,7 +230,8 @@ def main():
                 continue
 
             ## Clean data
-            race.clean_data()
+            race.clean_laps_data()
+            race.clean_weather_data()
 
             ## Process data
             race.dummy_encoding()
