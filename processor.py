@@ -137,7 +137,10 @@ class F1RaceProcessor:
         ).round(3)
 
         # Should Pit Next determination
-        laps["ShouldPitNext"] = laps["PitInTime"].shift(-1).notna()
+        laps = laps.sort_values(["Driver", "LapNumber"])
+        laps["pit_occurred"] = (laps.groupby("Driver")['Stint'].diff() != 0).shift(-1).astype('boolean').fillna(False)
+        laps["ShouldPitNext"] = laps.groupby("Driver")["pit_occurred"].shift(-1).astype('boolean').fillna(False)
+        laps = laps.drop("pit_occurred", axis=1)
 
         self.race["processed"] = laps
 
