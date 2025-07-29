@@ -172,9 +172,7 @@ class F1RaceProcessor:
         # Race Progress (normalized)
         laps = laps.sort_values(["LapNumber"])
         total_laps = laps["LapNumber"].max()
-        laps["RaceProgress"] = laps.groupby("LapNumber").transform(
-            lambda x: x / total_laps
-        )
+        laps["RaceProgress"] = laps["LapNumber"] / total_laps
 
         # Should Pit Next determination
         laps = laps.sort_values(["Driver", "LapNumber"])
@@ -236,10 +234,10 @@ class F1RaceProcessor:
         self.race["processed"].to_parquet(output_dir / f'{self.circuit}_processed.parquet')
 
 
-def main():
+def process(raw_path, processed_path):
 
-    input = Path("data/raw")
-    output = Path("data/processed")
+    input = Path(raw_path)
+    output = Path(processed_path)
 
     # NO 2018 SINCE MANY GAPS IN STINT AND TYRELIFE DATA
     # 2019 - 2023 USED FOR TRAINING
@@ -283,6 +281,53 @@ def main():
 
             ## Save data to file
             race.save_to_parquet(output)
+
+def combine(processed_path):
+    all = []
+    base_path = Path(processed_path)
+
+    for year_dir in base_path.iterdir():
+
+        if year_dir == "2018":
+            continue
+
+        if year_dir.is_dir() and year_dir.name.isdigit():
+
+            year = year_dir.name
+            
+            for parquet_file in year_dir.glob("*_processed.parquet"):
+                event = parquet_file.stem.replace("_processed", "")
+
+                df = pd.read_parquet(parquet_file)
+                
+                df["Year"] = int(year)
+                df["RaceName"] = event
+
+                all.append(df)
+
+    combined = pd.concat(all, ignore_index=True)
+
+    patterns = ["Team_", "Driver_"]
+    boolean_like_columns = []
+
+    for col in combined.columns:
+        if any(pattern in col for pattern in patterns):
+            boolean_like_columns.append(col)
+
+    for col in boolean_like_columns:
+        missing = combined[col].isnull().sum()
+        if missing > 0:
+            combined[col] = combined[col].astype("boolean").fillna(False)
+
+    combined.to_parquet(Path("data/all_processed.parquet"), index=False)
+
+def main():
+
+    raw_path = Path("data/raw")
+    processed_path = Path("data/processed")
+
+    process(raw_path, processed_path)
+    combine(processed_path)
 
 if __name__ == "__main__":
     main()
