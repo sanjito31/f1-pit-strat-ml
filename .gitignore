@@ -3,3 +3,5 @@ data
 .venv
 graveyard.py
 plan.md
+models
+.DS_Store
