@@ -178,6 +178,12 @@ class F1RaceProcessor:
         laps = laps.sort_values(["Driver", "LapNumber"])
         laps["pit_occurred"] = (laps.groupby("Driver")['Stint'].diff() != 0).shift(-1).astype('boolean').fillna(False)
         laps["ShouldPitNext"] = laps.groupby("Driver")["pit_occurred"].shift(-1).astype('boolean').fillna(False)
+        
+        # PitWindow: True for pit lap, 2 laps before and 2 laps after
+        laps["PitWindow"] = False
+        for offset in [-2, -1, 0, 1, 2]:
+            laps["PitWindow"] |= laps.groupby("Driver")["pit_occurred"].shift(offset).fillna(False)
+        
         laps = laps.drop("pit_occurred", axis=1)
 
         self.race["processed"] = laps
@@ -203,7 +209,6 @@ class F1RaceProcessor:
                         "DriverNumber", 
                         "LapTime", 
                         "Compound", 
-                        "LapNumber",
                         "PitOutTime",
                         "PitInTime",
                         "Sector1Time",
@@ -224,7 +229,8 @@ class F1RaceProcessor:
                         "Deleted",
                         "DeletedReason",
                         "FastF1Generated",
-                        "IsAccurate"], axis=1)
+                        "IsAccurate",
+                        "IsValidLap"], axis=1)
         
     def save_to_parquet(self, output):
 
@@ -246,6 +252,8 @@ def process(raw_path, processed_path):
     data_start_year = 2019
     data_end_year = 2024
 
+    print("Processing...")
+
     for year in range(data_start_year, data_end_year + 1):
 
         tracks = {}
@@ -255,6 +263,8 @@ def process(raw_path, processed_path):
         for _, event in tracks.items():
 
             track = event["name"]
+
+            print(f"{track} {year}")
 
             ## Create race object
             race = F1RaceProcessor(track, year, input)
@@ -318,6 +328,15 @@ def combine(processed_path):
         missing = combined[col].isnull().sum()
         if missing > 0:
             combined[col] = combined[col].astype("boolean").fillna(False)
+
+    ## Dummy Encode Track
+    teams = pd.get_dummies(combined["RaceName"], prefix="Race")
+    combined = pd.concat([combined, teams], axis=1)
+    combined = combined.drop(["RaceName"], axis=1)
+
+    # Convert all boolean columns to numerical values (False=0, True=1)
+    bool_cols = combined.select_dtypes(include=['bool', 'boolean']).columns
+    combined[bool_cols] = combined[bool_cols].astype(int)
 
     combined.to_parquet(Path("data/all_processed.parquet"), index=False)
 
