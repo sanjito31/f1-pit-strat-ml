@@ -5,3 +5,5 @@ graveyard.py
 plan.md
 models
 .DS_Store
+__pycache__
+main-old.py
